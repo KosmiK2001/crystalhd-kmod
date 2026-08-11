@@ -6,9 +6,9 @@ KDIR = /usr/src/linux-6.12.100-gentoo
 
 
 INCLUDES  = -I$(KDIR)/include
-INCLUDES += -I$(src)/../../include
-INCLUDES += -I$(src)/../../include/link
-INCLUDES += -I$(src)/../../include/flea
+INCLUDES += -I$(src)/include
+INCLUDES += -I$(src)/include/link
+INCLUDES += -I$(src)/include/flea
 
 FIRMWARE  = ../../firmware/fwbin/70015/bcm70015fw.bin
 FIRMWARE += ../../firmware/fwbin/70012/bcm70012fw.bin
