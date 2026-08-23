@@ -2648,6 +2648,17 @@ void crystalhd_flea_rx_isr(struct crystalhd_hw *hw, union FLEA_INTR_BITS_COMMON 
 		intr_sts.WholeReg, y_err_sts, uv_err_sts,
 		hw->rx_list_sts[0], hw->rx_list_sts[1]);
 
+	/* Full DMA engine snapshot for stall debugging */
+	dev_err(&hw->adp->pdev->dev,
+		"DMA sts: Y_CTRL=0x%08x HIF_CTRL=0x%08x Ycnt0=%u Ycnt1=%u UVcnt0=%u UVcnt1=%u picq_reg=0x%08x\n",
+		hw->pfnReadDevRegister(hw->adp, BCHP_MISC1_Y_RX_SW_DESC_LIST_CTRL_STS),
+		hw->pfnReadDevRegister(hw->adp, BCHP_MISC1_HIF_DMA_CTRL),
+		hw->pfnReadDevRegister(hw->adp, BCHP_MISC1_Y_RX_LIST0_CUR_BYTE_CNT),
+		hw->pfnReadDevRegister(hw->adp, BCHP_MISC1_Y_RX_LIST1_CUR_BYTE_CNT),
+		hw->pfnReadDevRegister(hw->adp, BCHP_MISC1_HIF_RX_LIST0_CUR_BYTE_CNT),
+		hw->pfnReadDevRegister(hw->adp, BCHP_MISC1_HIF_RX_LIST1_CUR_BYTE_CNT),
+		hw->pfnReadDevRegister(hw->adp, RX_DMA_PIC_QSTS_MBOX));
+
 	if (intr_sts.L0YRxDMAErr || intr_sts.L1YRxDMAErr) {
 		uint32_t lst = intr_sts.L1YRxDMAErr ? 1 : 0;
 		uint32_t bc = hw->pfnReadDevRegister(hw->adp,

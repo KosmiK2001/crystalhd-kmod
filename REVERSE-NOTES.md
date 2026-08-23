@@ -127,3 +127,69 @@ _2026-08-23. Реверс Windows-драйвера BRCMHD64.sys (v03.07.00, Dell
 
 Вывод: выходной конвейер FW (аллокатор кадров + патч дескрипторов) не функционирует.
 Входной конвейер и командный интерфейс полностью работоспособны.
+
+## Реверс bcm70015fw.bin (2026-08-23, четвёртый заход — ПРОРЫВ: полная карта командного слоя)
+
+### Метод (воспроизводимый)
+1. **Динамический дамп DDR**: утилита `tools/fwdump.c` (DtsDevMemRd → BCM_IOC_MEM_RD)
+   и `tools/probe.c` (открывает девайс, стартует декодер и снимает состояние DRAM
+   ДО/ПОСЛЕ START_VIDEO в одном процессе — важно: каждое DtsDeviceOpen шлёт
+   DEBUG_SETUP+INIT и затирает слоты очереди команд!).
+2. **Дифф DDR со статическим образом**: FW исполняется прямо из DRAM@0 (копия файла
+   байт-в-байт живая: .data модифицируется). Изменённые страницы = рантайм.
+3. **ADR-скан**: ARM-код 32-битный, строки адресуются ТОЛЬКО pc-relative
+   (`add rX, pc, #imm`), поэтому прямых литералов на строки нет. Скан пар
+   «инструкция→цель в области строк» даёт полную карту функция→строка.
+
+### Структура FW
+- Каталог логов BDBG {ptr,line,module} @0x6d600–0x6e100; строки @0x394–0x8f90;
+  ARC-образ AVD с ELF-символами внутри файла (~0xc1000 в DDR).
+- Sharedmem base = `*(0x100F6004)+1` (регистр скраба BORCH_END; драйвер пишет туда
+  GetScrubEndAddr(buffSz) — 0xd3000). FW зануляет base..+0xA00 при старте.
+
+### Карта функций ARM-слоя SMP (все адреса = файловые = DRAM)
+- `SMP_CmdApi_ProcessHstCmd` @0x5f2c. rsp = cmd+0x114; memset(rsp,0,0x100);
+  rsp[0]=echo eCmd; dispatch бинарным поиском по eCmd:
+  - CH_OPEN 0x73763100 (+0xfc от 0x73763004) → 0x62cc
+  - INPUT_PARAMS 0x73763108 → 0x662c → bl 0x3f68
+  - ACTIVATE 0x73763102 → 0x6450; STATUS +1→0x6478; FLUSH +2→0x6498;
+    TRICK_PLAY +3→0x64c4; TS_PIDS +4→0x64ec; PS_STREAM_ID +5→0x660c;
+    CH_CLOSE 0x73763101 → 0x6428; DROP(0x10E)→0x6654
+  - **START_VIDEO 0x7376311A (+0x12) → 0x667c → bl SMP_CmdIf_DecStart@0x4630**
+  - STOP_VIDEO (+0x13) → 0x66a4 → bl 0x4288
+- `SMP_CmdIf_DecStart` @0x4630: r7=[cmd+0x1c]=channelId; глобал таблицы каналов
+  [0x3de8]=0xd1ff4 ([+4]=база массива); запись канала stride 0x1CC
+  (**in-use флаг +0xC4**, state +0xD2, hXVDDecode +0x18);
+  вызывает SMP_StartVideo@0xdf0 → BXVD_StartDecode([chan+0xD4] handle, bl 0xc0bc),
+  затем XPT Playback Settings (bl 0x1bf04/0x1ba4c с [chan+0xBC]).
+- Глобалы: очередь хост-команд 0xd5124 (+4 head/+8 count), рабочие очереди
+  0xd5164/0xd5174/0xd5134; main loop @0x8d98 поллит; воркер диспетчера @0x9048;
+  hostCommIntHandler @0x8d48 читает MBOX_ARM1 (0x100e0000+0x1c) → адрес команды.
+- RX: `StartRxDmaList` @0x77e0 программирует Y Rx DMA блок **0x10502000**:
+  list0 lo/hi=+0x40/+0x44, list1 lo/hi=+0x48/+0x4C, START-бит |=1 в lo-регистре;
+  вызывается из RX-обработчика (чтение PDI) инструкцией @0x8818 c &chanCtx[0x188].
+
+### Командный интерфейс (наблюдаемое рантайм-поведение)
+- Хост пишет 24 слова в base+0x100 (=0xd3100), адрес — в MBOX_ARM1.
+- FW копирует команду в очередь слотов **шаг 0x218** (0x100 cmd + 0x100 rsp + meta,
+  первый наблюдённый слот 0xd5430), обрабатывает воркером, ответ пишет в
+  base+0x200 (0xd3200), адрес ответа — в MBOX_PCI1.
+- PDI (PIC_DELIVERY_HOST_INFO, 6 слов без Reserved) хост пишет в base+0x400
+  (0xd3400), канал — в MBOX_ARM2 (0x100e0024).
+
+### ГЛАВНЫЙ ВЫВОД сессии: нули в ответе START_VIDEO — НЕ БАГ
+`DecStart` заполняет в ответе ТОЛЬКО rsp[1]=sequence и rsp[2]=status
+(str r,[r4,4] / str r,[r4,8] @0x4910–0x4918); остальные поля (picBuf/picRelBuf/
+picInfoDeliveryQ/picInfoReleaseQ/channelStatus) остаются нулями после memset'а
+диспетчера. Эта FW (1.54.0.0) В ПРИНЦИПЕ не возвращает очереди через START_VIDEO —
+flea-схема delivery работает через PDI/MBOX_ARM2, а не через delQ/relQ из ответа.
+Драйверу эти поля не нужны (hw->pib_del_Q_addr используется только link-путём 70012).
+
+### Следующий шаг (конкретно)
+Ищем, кто патчит word0 дескриптора (sdram_buff_addr) и почему Y Rx получает
+underrun: трассировать обработчик PDI (функция вокруг 0x83xx–0x88xx: bl 0x7bd4,
+bl 0x7898, bl 0x82d0, bl 0xe110), поля chanCtx+0xE0..0x1CC. Проверить:
+заполняет ли FW chanCtx[0x188] {list,descLo,descHi} из нашего PDI (дампить
+chanCtx до/после поста захвата — база канала узнать из CHANNEL_OPEN rsp или
+глобала 0xd1ff4+4). PicQSts bitmap уже сигналится — значит до ветки delivery FW
+доходит; вопрос в аллокаторе SDRAM-буфера кадра.
