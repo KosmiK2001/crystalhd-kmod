@@ -193,3 +193,29 @@ bl 0x7898, bl 0x82d0, bl 0xe110), поля chanCtx+0xE0..0x1CC. Проверит
 chanCtx до/после поста захвата — база канала узнать из CHANNEL_OPEN rsp или
 глобала 0xd1ff4+4). PicQSts bitmap уже сигналится — значит до ветки delivery FW
 доходит; вопрос в аллокаторе SDRAM-буфера кадра.
+
+## Эксперимент force_sdram_addr (2026-08-23, вечер)
+Гипотеза «FW должен патчить word0 дескриптора» ОПРОВЕРГНУТА:
+- В kmod-dbg добавлен module_param `force_sdram_addr` (прописывает word0 всех
+  RX-дескрипторов перед постингом PDI).
+- insmod ... force_sdram_addr=0x00a34000 (адрес кадрового буфера из chanCtx+0x120):
+  поведение ИДЕНТИЧНО базовому — те же bytecnt (lst0=40, lst1=38440), те же
+  underrun 0x800/0x2000, FETCH TIMEOUT. => underrun НЕ зависит от word0.
+- Интерпретация: Y Rx engine черпает данные не из произвольной SDRAM-адресации
+  дескриптора, а из выходного потока декодера; UNDERRUN = декодер не выдаёт кадр.
+  Вход при этом полностью потребляется (TX done растёт), PicQSts сигналится.
+- Контекст канала ch0 @0xd3a00 (снят rawdump'ом во время FETCH TIMEOUT,
+  инструмент tools/rawdump.c читает /dev/crystalhd без lib-open и не порит state):
+  - +0xC4 word = 01 01 01 (in-use/c5/c6 флаги все взведены), +0xD2=1 (playing)
+  - +0x188: {list=1, DescY=0x9a7d0000, DescUV=0x9a7d3fe0} — наш PDI прочитан FW!
+  - +0x178/+0x180 = 1 (флаги BVN-ветки доставки)
+  - +0xBC=0xd8280 (hXVDDecode), +0xD4=0xe5eec (BXVD handle)
+  - +0x120/+0x124 = 0x00a34000/0x00a4b000 (кандидаты кадровых буферов SDRAM)
+  - глобал [0xd221c] = 0xf1ea0000 (FLEA_WORK_AROUND_SIG, маска FW=0)
+- Вывод: командный слой, PDI, программирование DMA-движков FW выполняет ПРАВИЛЬНО;
+  затык — выше: AVD/ARC ядро не производит кадров (или его выход не подключен к
+  Y Rx входу). Кандидаты проверки:
+  1. Жив ли ARC: heartbeat/статус-регистры AVD, счётчики Decode_Count/PPB.
+  2. DramLog ARC-ядра (строки DramLogControl/DramLogCmd в FW; консольные команды
+     dumpall/version — ARC console через UART/порт моста).
+  3. Сравнить регистры AVD-блока с референсом из Windows-прогона (Vista SSD).
