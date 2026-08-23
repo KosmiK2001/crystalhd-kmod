@@ -219,3 +219,30 @@ chanCtx до/после поста захвата — база канала уз
   2. DramLog ARC-ядра (строки DramLogControl/DramLogCmd в FW; консольные команды
      dumpall/version — ARC console через UART/порт моста).
   3. Сравнить регистры AVD-блока с референсом из Windows-прогона (Vista SSD).
+
+## Проверка живости AVD/ARC (2026-08-23, поздний вечер)
+Инструменты: tools/rawdump.c (DDR через /dev/crystalhd без lib-open),
+tools/rawreg.c (чтение чиповых регистров через BCM_IOC_REG_RD).
+- CLK_PM_CTRL (0x070004) = 0x03000000 → DIS_AVD_CLK=0 (клок AVD включён).
+- IP_SHIM CPU_ID (0x860010) = 0x302 читается; AVD_CLK_GATE (0x860014) = 0x0e:
+  загейчены ТОЛЬКО clk_mp4/clk_vc1_db/clk_vc1; clk_avc (H.264) ВКЛЮЧЁН —
+  FW гейтит по запрошенному кодеку, это норма.
+- BVN_INT_REG (0x86000c) = 0 во время декода.
+- ARM UART (0x0f3000..08): CTL=0x00730001 активен, DATA не выдаёт потока;
+  канал логов недоступен. SMP_CmdIf_DebugSetup в этой FW = NOT IMPLEMENTED
+  (строка @0x5b34) — DEBUG_SETUP бесполезен, логи FW не получить в принципе.
+- Регистры ARC CPUCORE (0x844000+) читаются нулями (не маппятся через этот window).
+
+### Текущая рабочая гипотеза
+Вход потребляется TX'ом полностью, но ни одного кадра не производится:
+подозрение на PES-парсинг. Для FLEA lib ВСЕГДА ставит BC_STREAM_TYPE_PES и
+заворачивает ES→PES (libcrystalhd_if.cpp DtsSetInputFormat, DtsSetPESConverter,
+libcrystalhd_parser.cpp). Если наш PES-конвертер формирует пакеты, которые
+RAVE/PES-парсер FW молча отбрасывает (stream id, flags, stuffing), получаем
+ровно наблюдаемую картину. Next:
+1. Сверить байты PES-пакетов наши vs bcmDIL.dll 3.17 (Windows flow) на одном файле.
+2. Прочитать RAVE-контекст (CDB/ITB valid/read указатели) из памяти FW во время
+   теста: chanCtx ch0 @0xd3a00 (+0xBC=hXVDDecode 0xd8280) → xpt/rave структуры;
+   если указатели стоят — данные не доходят до парсера; если двигаются — парсер,
+   а затык дальше (AVD).
+3. Контрольный прогон под Windows/Vista (решает вопрос «железо или мы» одним тестом).
