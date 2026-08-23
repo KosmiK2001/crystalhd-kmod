@@ -360,6 +360,7 @@ struct crystalhd_hw {
 	spinlock_t		rx_lock;
 	uint32_t		rx_list_post_index;
 	enum list_sts		rx_list_sts[DMA_ENGINE_CNT];
+	struct crystalhd_rx_dma_pkt *dbg_last_rx; /* debug: last posted RX pkt */
 	struct crystalhd_dioq	*rx_rdyq;
 	struct crystalhd_dioq	*rx_freeq;
 	struct crystalhd_dioq	*rx_actq;
@@ -389,6 +390,7 @@ struct crystalhd_hw {
 	uint32_t	PicQSts;		/* This is the bitmap given by PiCQSts Interrupt*/
 	uint32_t	TxBuffInfoAddr;		/* Address of the TX Fifo in DRAM*/
 	uint32_t	FleaRxPicDelAddr;	/* Memory address where the pictures are fired*/
+	uint32_t	FleaWorkAroundMask;	/* RX workarounds advertised by FW via SCRATCH_5 (0xF1EA sig) */
 	uint32_t	FleaFLLUpdateAddr;	/* Memory Address where FLL is updated*/
 	uint32_t	FleaBmpIntrCnt;
 	uint32_t	RxSeqNum;
