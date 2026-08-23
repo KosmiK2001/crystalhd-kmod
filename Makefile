@@ -2,7 +2,13 @@
 #  Broadcom Crystal HD (BCM970012) controller Makefile.
 #
 #
-KDIR = /usr/src/linux-6.12.100-gentoo
+# Kernel source dir: SYSSRC is set by the Gentoo ebuild (linux-mod-r1),
+# standalone builds fall back to the running kernel's build dir.
+ifdef SYSSRC
+KDIR := $(SYSSRC)
+else
+KDIR ?= /lib/modules/$(shell uname -r)/build
+endif
 
 
 INCLUDES  = -I$(KDIR)/include
@@ -15,6 +21,8 @@ FIRMWARE += ../../firmware/fwbin/70012/bcm70012fw.bin
 
 EXTRA_CFLAGS   = -D__KERNEL__ -DMODULE $(INCLUDES) $(INC)
 EXTRA_CFLAGS  += -Wall -Wstrict-prototypes -Wno-trigraphs  -O2
+# Kernel 6.18+ ignores EXTRA_CFLAGS; mirror it into ccflags-y
+ccflags-y = $(EXTRA_CFLAGS)
 
 OBJ :=	crystalhd_lnx.o \
 	crystalhd_misc.o \
